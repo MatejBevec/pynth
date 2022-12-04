@@ -1,0 +1,13 @@
+digraph {
+	graph [rankdir=LR]
+	1478818065920 [label="*" color=black shape=record]
+	1478818054208 [label="+" color=red shape=record]
+	1478830631728 [label=Wave color=blue shape=record]
+	1478830636384 [label=Delay color=black shape=record]
+	1478818055024 [label=Wave color=blue shape=record]
+	1478818054208 -> 1478818065920
+	1478818055024 -> 1478818065920
+	1478818065920 -> 1478830636384
+	1478830631728 -> 1478818054208
+	1478830636384 -> 1478818054208
+}

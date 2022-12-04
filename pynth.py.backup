@@ -1,0 +1,311 @@
+import os
+import sys
+import math
+import numbers
+
+import numpy as np
+import librosa
+import sounddevice as sd
+import matplotlib.pyplot as plt
+from graphviz import Digraph
+
+SR = 48000 # TEMP 
+CHUNK = 200000 # TIME CHUNK LEN IN SAMPLES
+time = 0 # CURRENT CHUNK ON THE CLOCK
+
+
+class Module():
+
+    def __init__(self):
+        self.enabled = True
+        self._ins = None
+        self._out = None
+
+    def __repr__(self):
+        pass
+
+    def _next(self):
+        # advance chunk
+
+        # OPTION 1:
+        # if all outs have called, advance
+        # problem: some outs can be dead ends, not general
+
+        # OPTION 2: 
+        # a global (or player node's) clock advances all nodes
+        # problem: global seems wrong somehow but is it? -> a real analog synth, runs on a "global clock", no?
+            # SUB A: **   time is simply a global var that _chunk uses, no explicit advancing
+            #   problem: some modules need to access history longer than a chunk -> specify length in _chunk?
+            #   or: also pass time at _chunk
+            # SUB B: *   all nodes are stored, and _next is called on all by the clock
+            #   problem: those modules have to handle storing of enough chunks
+            # SUB C:    _next calls are backpropagated from player, problem: dead end nodes are not updated
+
+        
+        pass
+
+    def _chunk(self):
+        # 1. Fetch chunk from inputs
+        # 2. Perform own operation
+        # 3. Return transformed chunk
+        # chunk is a [CHUNK] numpy array representing audio signal
+        pass
+
+    def __add__(self, other):
+        if not isinstance(other, Module):
+            other = Wave(other)
+        return Add(self, other)
+
+    def __radd__(self, other):
+        return self + other
+    
+    def __mul__(self, other):
+        if not isinstance(other, Module):
+            other = Wave(other)
+        return Mul(self, other)
+
+    def __rmul__(self, other):
+        return self * other
+
+    def play(self, dur):
+        for ch, smp in enumerate(range(0, dur, CHUNK)):
+            print(smp)
+            sd.play(self._chunk(), SR)
+            sd.wait()
+
+
+class Wave(Module):
+
+    def __init__(self, data):
+        super().__init__()
+        if isinstance(data, list):
+            data = np.array(data)
+        self.data = data
+        self.chunk = 0 # probably not the best way
+
+    def _chunk(self):
+        ch = self.chunk
+        self.chunk += 1
+        if isinstance(self.data, numbers.Number):
+            return np.full((CHUNK,), self.data)
+        if isinstance(self.data, np.ndarray):
+            l = len(self.data)
+            truedata = self.data[min(ch*CHUNK, l) : min((ch+1)*CHUNK, l)]
+            print(truedata)
+            print(len(truedata))
+            return np.pad(truedata, ((0, CHUNK-len(truedata))))
+        if callable(self.data):
+            chsecs = CHUNK / SR
+            return self.data(np.linspace(ch*chsecs, (ch+1)*chsecs, CHUNK))
+
+
+class Sin(Wave):
+
+    def __init__(self, freq, amp=1.0, phase=0.0):
+        super().__init__(None)
+        self.freq = freq
+        self.amp = amp
+        self.phase = phase
+        self.data = lambda x: amp * np.sin(x*2*math.pi*self.freq + self.phase)
+
+        
+    
+class Add(Module):
+
+    def __init__(self, ina=None, inb=None):
+        super().__init__()
+        self.ina = ina
+        self.inb = inb
+        self._ins = set([ina, inb])
+        if ina: ina._out = self
+        if inb: inb._out = self
+
+    def _chunk(self):
+        return self.ina._chunk() + self.inb._chunk()
+
+
+class Mul(Module):
+
+    def __init__(self, ina=None, inb=None):
+        super().__init__()
+        self.ina = ina
+        self.inb = inb
+        self._ins = set([ina, inb]) # TODO: this doesn't get called when manually adding ins
+        if ina: ina._out = self
+        if inb: inb._out = self
+    
+    def _chunk(self):
+        return self.ina._chunk() * self.inb._chunk()
+
+
+class Lowpass(Module):
+
+    def __init__(self, ina=None, cutoff=500, spread=200):
+        self.ina = ina
+        self._ins = set([ina])
+        if ina: ina._out = self
+        
+        self.cutoff = cutoff
+        ct_idx = int(cutoff * CHUNK / SR)
+        self.filt = np.ones(CHUNK)
+        self.filt[ct_idx:ct_idx+spread] = np.linspace(1, 0, spread)
+        self.filt[ct_idx+spread:] = 0
+        print(self.filt)
+
+    def _func(self, x):
+        # TODO: incompatible with small chunks, fix it
+        freqs = np.fft.fft(x)
+        freqs = self.filt * freqs
+        return np.real(np.fft.ifft(freqs))
+
+    def _chunk(self):
+        return self._func(self.ina._chunk())
+
+
+class Delay(Module):
+
+    def __init__(self, ina=None, delay=0.01):
+        self.ina = ina
+        self._ins = set([ina])
+        if ina: ina._out = self
+        self.delay = delay
+        self.dsmp = int(delay * SR)
+        self.prevch = np.zeros(CHUNK) # TODO: sloppy, put this logic in super class
+    
+    def _chunk(self):
+
+        #just trying out
+        try:
+            ch = np.zeros(CHUNK)
+            ch[:self.dsmp] = self.prevch[-self.dsmp:]
+            ch[self.dsmp:] = self.ina._chunk()[:-self.dsmp]
+            self.prevch = ch
+        except RecursionError as e:
+            print(e)
+            return np.zeros(CHUNK)
+        return ch
+
+
+    
+
+
+def showsound(module, x1=0, x2=5000):
+    plt.plot(module._chunk())
+    plt.xlim((x1, x2))
+    plt.show()
+
+
+def trace(root):
+    root._isroot = True
+    nodes, edges = set(), set()
+    def build(v):
+        if v not in nodes:
+            nodes.add(v)
+            if v._ins:
+                for child in v._ins:
+                    edges.add((child, v))
+                    build(child)
+    build(root)
+    return nodes, edges
+
+def drawgraph(root, format='svg', rankdir='LR'):
+    """
+    format: png | svg | ...
+    rankdir: TB (top to bottom graph) | LR (left to right)
+    """
+    assert rankdir in ['LR', 'TB']
+    nodes, edges = trace(root)
+    dot = Digraph(format=format, graph_attr={'rankdir': rankdir}) #, node_attr={'rankdir': 'TB'})
+    
+    for n in nodes:
+        # "{ data %.4f | grad %.4f }" % (n.data, n.grad)
+        isroot = hasattr(n, "_isroot") and n._isroot
+        color = 'black'
+        if isinstance(n, Wave): color = 'blue'
+        if isroot: color = 'red'
+        label = n.__class__.__name__
+        if isinstance(n, Add): label = '+'
+        if isinstance(n, Mul): label = "*"
+        dot.node(name=str(id(n)), label=label, shape='record', color=color)
+        # if n._op:
+        #     dot.node(name=str(id(n)) + n._op, label=n._op)
+        #     dot.edge(str(id(n)) + n._op, str(id(n)))
+    
+    for n1, n2 in edges:
+        dot.edge(str(id(n1)), str(id(n2))) # + n2._op
+    
+    return dot
+
+
+
+if __name__ == "__main__":
+
+    #wav = Wave(np.linspace(0, 5, 50))
+
+    saw = Sin(100)
+    for i in range(5):
+        saw += Sin(i*100)
+
+    mod  = Sin(1)
+    out = mod * saw
+    out = Lowpass(out)
+
+    # square = Sin(30)
+    # for i in range(1, 11, 2):
+    #     square += Sin(i*40)
+
+    # sqmod = Sin(2)
+    # for i in range(1, 11, 2):
+    #     sqmod += Sin(i*0.5)
+    
+    # out += square * sqmod
+
+    # noise = Wave(np.random.rand(4000)-0.5)
+    # lowpass = Lowpass(None, cutoff=500, spread=300)
+
+    # add = Sin(300)
+    # add += Lowpass(Delay(add, delay=0.001))
+    # add += Lowpass(Delay(add, delay=0.002))
+    # add += Lowpass(Delay(add, delay=0.003))
+    # add += Lowpass(Delay(add, delay=0.004))
+
+    # out = add
+
+    # TODO: backwards prop must not advance "time", because multiple outputs can be calling it,
+    # handle multiple outputs in general
+
+    
+    g = drawgraph(out)
+    #g.render("gout")
+    g.render("gout", view=True)
+    showsound(out, x1=0, x2=10000)
+    out.play(200000)
+
+    #TODO: recursion detection
+    
+
+    # print(sd)
+    # arr = np.full(1000000, 0.5)
+    # print(arr)
+    # sd.play(arr, SR)
+    # sd.wait()
+
+
+
+# Something like this (modules like jsyn but cleaner):
+    # sin = pynth.sin(400, 1)
+    # saw = pynth.saw(200, 0.5)
+    # shaped = pynth.waveshape(sin + saw, shape)
+    # out = pynth.eq(shaped, bands=3, values=[0.9, 0.9, 1.1])
+    # out.play()
+# Where waves can either have a start and end time or not
+
+# Or like autograd?:
+    # def tr():
+        # sin = pynth.sin(400, 1)
+        # saw = pynth.saw(200, 0.5)
+        # shaped = pynth.waveshape(sin + saw, shape)
+        # out = pynth.eq(shaped, bands=3, values=[0.9, 0.9, 1.1])
+    # tr().play()
+
+
