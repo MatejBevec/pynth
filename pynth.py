@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 from graphviz import Digraph
 
 SR = 48000 # TEMP 
-CHUNK = 50000 # TIME CHUNK LEN IN SAMPLES
-MAXDEPTH = 300
+CHUNK = 5000 # TIME CHUNK LEN IN SAMPLES
+MAXDEPTH = 30
 time = 0 # CURRENT CHUNK ON THE CLOCK
 
 
@@ -81,12 +81,13 @@ class Module():
         pass
 
     def _chunk(self, t, k=1, d=0):
-        if d > MAXDEPTH:
+        if d > MAXDEPTH or t < 0:
             return np.zeros(k*CHUNK)
         if not hasattr(self, "_mem"):
             self._mem = {}
         if (t, k) in self._mem:
             return self._mem[(t, k)]
+        print(type(self), k, d)
         chunk = self._compute(t, k, d)
         #print(type(chunk))
         assert len(chunk) == k*CHUNK
@@ -122,6 +123,10 @@ class Wave(Module):
         return chunk
 
 
+# TODO: consider removing amp and phase, it can be done with Mul and Delay
+# TODO: consider using factory methods like sin(), then saw() can return a special Triangle
+# TODO: if we have lambda func. with precomputed params changing attributes wont work
+
 class Sin(Wave):
 
     def __init__(self, freq, amp=1.0, phase=0.0):
@@ -129,7 +134,35 @@ class Sin(Wave):
         self.freq = freq
         self.amp = amp
         self.phase = phase
-        self.data = lambda x: amp * np.sin(x*2*math.pi*self.freq + self.phase)
+        self.data = lambda t: self.amp * np.sin(t*2*math.pi*self.freq + self.phase)
+
+class Triangle(Wave):
+
+    def __init__(self, freq, amp=1.0, ratio=0.5):
+        super().__init__(None)
+        self.freq = freq
+        self.amp = amp
+        self.ratio = ratio
+        p = 1/self.freq
+        rtime = p*ratio
+        self.data = lambda t: (t%p <= rtime) * ((t%p)  / rtime - 1) -  (t%p > rtime ) * (((t%p) - rtime) / (p - rtime))
+
+class Saw(Wave):
+
+    def __init__(self, freq, amp=1.0):
+        super().__init__(None)
+        self.freq = freq
+        self.amp = amp
+        self.data = lambda t: self.amp * 2 * (t*self.freq - np.floor(0.5 + t*self.freq))
+
+class Square(Wave):
+
+    def __init__(self, freq, amp=1.0):
+        super().__init__(None)
+        self.freq = freq
+        self.amp = amp
+        self.data = lambda t: self.amp * np.sign(np.sin(t*2*math.pi*self.freq))
+        
 
         
     
@@ -211,11 +244,45 @@ class Delay(Module):
         self.dsmp = int(delay * SR)
         self.dch = int(self.dsmp / CHUNK) + 1
         #self.prevch = np.zeros(CHUNK) # TODO: sloppy, put this logic in super class
+
+        ## TODO: Exploding k problem
+        # this doesnt work for small chunks (if a delay has effect beyond chunk size)
+        #new_k = max(k, 1 + self.dch)
+        #chunk = np.pad(chunk, (k*CHUNK - len(chunk), 0))
+        # this becomes too slow with large chunk and rec depths
+        #new_k = k + self.dch
+        # CHUNK = 500, MAXDEPTH = 50
+
+        # full solution should be to replace t, k with t1, t2 in samples, so
+        # each module requests exactly what is needed
+        
+        #one part of solution is below
+        # NOTE: is this general enough for the superclass?
+        self._dmem = {}
     
     def _compute(self, t, k=1, d=0):
-        chunk = np.zeros(k*CHUNK)
-        hist = self.ina._chunk(t, k + self.dch, d+1)
+        #chunk = np.zeros(k*CHUNK)
+        ink = k + self.dch
+
+        print(self._dmem.keys())
+
+        if t in self._dmem:
+            memk, memch = self._dmem[t]
+            print(memk, ink)
+            if memk <= ink:
+                newch = self.ina._chunk(t-memk, ink-memk, d+1)
+                hist = np.concatenate([newch, memch])
+            else:
+                hist = newch
+        else:
+            hist = self.ina._chunk(t, ink, d+1)
+        print(t, ink)
+        self._dmem[t] = (ink, hist)
+        #print(len(newch ))
+        #print(-k*CHUNK -self.dsmp, -self.dsmp)
         chunk = hist[-k*CHUNK -self.dsmp : -self.dsmp]
+        #chunk = np.pad(chunk, (k*CHUNK - len(chunk), 0))
+        
         assert len(chunk) == k*CHUNK 
         return chunk
 
@@ -300,66 +367,42 @@ def drawgraph(root, format='svg', rankdir='LR'):
 
 if __name__ == "__main__":
 
-    #wav = Wave(np.linspace(0, 5, 50))
 
-    # saw = Sin(100)
-    # for i in range(5):
-    #     saw += Sin(i*100)
-
-    # mod  = Sin(1)
-    # out = mod * saw
-    # out = Lowpass(out)
-
-    # square = Sin(30)
-    # for i in range(1, 11, 2):
-    #     square += Sin(i*40)
-
-    # sqmod = Sin(2)
-    # for i in range(1, 11, 2):
-    #     sqmod += Sin(i*0.5)
-    
-    # out += square * sqmod
-
-    #noise = Wave(np.random.rand(4000)-0.5)
-    # lowpass = Lowpass(None, cutoff=500, spread=300)
-
-    # add = Sin(300)
-    # add += Lowpass(Delay(add, delay=0.001))
-    # add += Lowpass(Delay(add, delay=0.002))
-    # add += Lowpass(Delay(add, delay=0.003))
-    # add += Lowpass(Delay(add, delay=0.004))
-
+    # noise = Sin(200)
+    # delay = Delay(None, delay=0.005)
+    # add = noise + delay
+    # delay.ina = 0.95 * add
+    # delay._ins = set([delay.ina])
     # out = add
 
-
-    #out = noise +  Sin(300) * Sin(2)
-
-    # Quazi carplus
-    # noise = Wave(np.random.rand(4000)-0.5)
-    # out = noise
-    # for i in range(1, 30):
-    #     val = np.array([((10-i)/10)])[0]
-    #     out +=  val * Delay(out, delay=0.01*i)
+    # g = drawgraph(out); g.render("gout", view=True)
+    # showsound2(out, x2=10000)
+    #out.play(100000)
 
 
-    # AMP MODULATION
-
-    out = Sin(50) * Sin(1)
-
-    g = drawgraph(out); g.render("gout", view=True)
-    showsound2(out, x2=24000)
-    out.play(50000)
 
 
-    # SAW WAVE FROM SINS
+
+
+
+    # # AMP MODULATION 
+
+    # out = Sin(50) * Sin(1)
+
+    # g = drawgraph(out); g.render("gout", view=True)
+    # showsound2(out, x2=24000)
+    # out.play(100000)
+
+
+    # # SAW WAVE FROM SINS
     
-    out = Sin(200)
-    for i in range(2, 10, 2):
-        out += Sin(200 * i)
+    # out = Sin(200)
+    # for i in range(2, 10, 2):
+    #     out += Sin(200 * i)
 
-    g = drawgraph(out); g.render("gout", view=True)
-    showsound2(out, x2=1000)
-    out.play(50000)
+    # g = drawgraph(out); g.render("gout", view=True)
+    # showsound2(out, x2=1000)
+    # out.play(50000)
 
 
     # KARPLUS STRONG (without lowpass)
