@@ -82,6 +82,7 @@ def toposort(out):
 
 
 class Module():
+    """Base class"""
 
     def __init__(self):
         # self.ins = {}
@@ -170,7 +171,7 @@ class Module():
         chunk = self._compute(t, d)
         self.outdata = chunk  
 
-    # OPERATIONS
+    # --- DUNDER OPERATIONS ---
 
     def __add__(self, other):
         if not isinstance(other, Module):
@@ -242,7 +243,8 @@ class Wave(Module):
         self._pad = pad
         super().__init__()
 
-    def _compute(self, t, d=0):
+    def _getdata(self, t, d=0):
+        # TODO: take t in seconds instead?
         reqst, end = (t)*CHUNK, (t+1)*CHUNK
         st, neg = max(reqst, 0), min(reqst, 0)
         chunk = None
@@ -258,7 +260,60 @@ class Wave(Module):
         assert len(chunk) == CHUNK
         return chunk
 
+    def _compute(self, t, d=0):
+        return self._getdata(t, d)
 
+
+def get_crossings(a):
+    mask = (a > 0.5)
+    shifted = np.ones(len(mask))
+    shifted[1:] = mask[:-1]
+    imp = np.logical_and(mask, np.logical_not(shifted))
+    loc = np.nonzero(imp)[0]
+    return loc
+
+class TriggWave(Wave):
+
+    def __init__(self, incontrol, data, pad=0):
+        self.ins = {"control": incontrol}
+        self.lastt = None
+        super().__init__(data, pad)
+
+    def _compute(self, t, d=0):
+        control = self.indata["control"]
+        loc = get_crossings(control)
+        out = np.zeros(CHUNK)
+        tsec = t*CHUNK / SR
+        tarray = np.arange(CHUNK) / SR + tsec
+
+        if self.lastt is not None:
+            elapsed = tsec - self.lastt
+            #out = self._getdata(elapsed, d)
+            elapsed_chunks = int(elapsed*SR/CHUNK)
+            shift = int(elapsed*SR) % CHUNK
+            #print(len(out), shift)
+            if shift == 0: shift = 1 #BODGE
+            out[:shift] = self._getdata(elapsed_chunks, d)[-shift:]
+            out[shift:] = self._getdata(elapsed_chunks+1, d)[:-shift]
+        for i in loc:
+            self.lastt = tarray[i]
+            wave = self._getdata(0, d)[i:]
+            out[i:] = wave
+        return out
+
+
+
+class Input(Wave):
+    """Generate output level with function call"""
+    # TODO: Async?
+
+    def __init__(self):
+        super().__init__(0)
+
+    def set(self, value):
+        assert isinstance(self.data, numbers.Number)
+        self.data = value
+        
 class Ramp(Wave):
     """Gradual interpolation between two signal values"""
 
@@ -298,16 +353,9 @@ class Pulses(Wave):
         return data
 
 
-def get_crossings(a):
-    mask = (a > 0.5)
-    shifted = np.ones(len(mask))
-    shifted[1:] = mask[:-1]
-    imp = np.logical_and(mask, np.logical_not(shifted))
-    loc = np.nonzero(imp)[0]
-    return loc
-
 
 class Envelope(Wave):
+    """Output an envelope signal at every input front"""
 
     # TODO: ADSR not just AD
 
@@ -345,11 +393,12 @@ class Envelope(Wave):
             inlen = min(len(self.adenv), len(out)-i)
             out[i: i+inlen] = self.adenv[:inlen]
             self.history = self.adenv[inlen:]
-
         return out
 
 
 class Sequencer(Wave):
+    """Output next bit from a sequence at every input front"""
+
     # TODO: how to handle possible repeat calls
 
     def __init__(self, ina, sequence):
@@ -374,7 +423,7 @@ class Sequencer(Wave):
         return out
 
 
-# BASIC OSCILLATORS
+# --- BASIC OSCILLATORS ---
 
 # TODO: consider removing amp and phase, it can be done with Mul and Delay
 
@@ -415,7 +464,7 @@ class Square(Wave):
         self.data = lambda t: self.amp * np.sign(np.sin(t*2*math.pi*self.freq))
 
 
-# OPERATIONS
+# --- OPERATIONS ---
 
 class TwoOp(Module):
     """An arithmetic or logic operation over two inputs."""
@@ -458,6 +507,7 @@ class Compare(TwoOp):
 
 
 class Delay(Module):
+    """Output a delayed input signal"""
 
     def __init__(self, ina=None, delay=0.005):
        
@@ -477,7 +527,7 @@ class Delay(Module):
         return y
 
 class Lowpass(Module):
-    # TEMP: moving average lowpass
+    """Moving average lowpass filter"""
 
     def __init__(self, ina=None, incontrol=None, cutoff=500):
         self.ins = {"a": ina, "control": incontrol}
@@ -514,13 +564,15 @@ class Lowpass(Module):
 
 
 
-# COMPOSED MODULES
+# --- COMPOSED MODULES ---
 
 # TODO: cleaner
 
 # TODO: compose() should accept parameters too
 
 def compose(factory, label=None):
+    """Create a composed module from a lambda expression"""
+
     arginfo = inspect.getfullargspec(factory)[0]
     def constructor(*args):
         assert len(args) == len(arginfo)
@@ -534,6 +586,7 @@ def compose(factory, label=None):
 
 
 class Compose(Module):
+    """A module that wraps a subgraph"""
 
     def __init__(self):
         # set self.ins and self.module
@@ -558,14 +611,6 @@ Crosstrigger = compose( lambda a:  (a > 0) * (((a > 0) >> 1/SR) < 0.5) , "Crosst
 
 
 
-# class Crossfader(Compose):
-
-#     def __init__(self, ina, inb, incontrol):
-#         self.ins = {"a": ina, "b": inb, "control": incontrol}
-#         self.module = ina*incontrol + inb*(1-incontrol)
-
-
-
     
 def showsound(module, x1=0, x2=30000, sec=False):
     if sec:
@@ -578,7 +623,6 @@ def showsound(module, x1=0, x2=30000, sec=False):
     plt.plot(x, data)
     plt.xlim((x1, x2))
     plt.show()
-
 
 def trace(root):
     root._isroot = True
@@ -701,56 +745,27 @@ if __name__ == "__main__":
     
     # OVERTONES
 
-    out = 0.5 * Sin(200)
-    for i in range(5):
-        out += 0.1 * Sin(100*i)
+    # out = 0.5 * Sin(200)
+    # for i in range(5):
+    #     out += 0.1 * Sin(100*i)
 
-    noise = Wave(np.random.rand(4000)-0.5)
-    noise += out
-    delay = Delay(None, delay=0.003)
-    add = noise + delay
-    delay.ins["a"] = 0.95 * add
-    out = add
-
-    dur = 10*SR
-
-    t0 = time.time()
-    out.eval(dur)
-    elapsed = time.time() - t0
-
-    print(elapsed)
-
-
-    
-
-
-
-    # TODO: declutter constants and TwoOps in the visualizer?
-
-    
-
-
-    # KARPLUS STRONG (without lowpass)
+    # KARPLUS
 
     # noise = Wave(np.random.rand(4000)-0.5)
+    # noise += out
     # delay = Delay(None, delay=0.003)
     # add = noise + delay
     # delay.ins["a"] = 0.95 * add
     # out = add
 
-    # out = noise
-    # for i in range(0, 100):
-    #     out += 0.95 * Delay(out)
 
+    control = Pulses()
+    wave = TriggWave(control, np.random.rand(5000))
+
+    out = wave
     
     g = drawgraph(out); g.render("gout", view=True)
     showsound(out, x2=150000)
     out.play(150000, live=False)
-
-
-    # delayed = Delay(noise, delay=0.001)
-    # plt.plot(noise.eval(5000))
-    # plt.plot(delayed.eval(5000), alpha=0.5)
-    # plt.show()
 
 
