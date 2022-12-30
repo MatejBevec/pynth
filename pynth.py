@@ -4,21 +4,28 @@ import math
 import numbers
 import inspect
 import time
+#from multiprocessing import Process
+from threading import Thread
 
 import numpy as np
 import scipy as sp 
 import librosa
 import sounddevice as sd
-import matplotlib
+import matplotlib.animation as animation
 #matplotlib.use("webagg")
 import matplotlib.pyplot as plt
 from graphviz import Digraph
 
+import keyboard
+
 SR = 48000 # TEMP 
-CHUNK = 1000 # TIME CHUNK LEN IN SAMPLES
+CHUNK = 100 # TIME CHUNK LEN IN SAMPLES
 MAXDEPTH = 30
 gtime = 0 # CURRENT CHUNK ON THE CLOCK - TEMP
 globnodes = []
+globscopes = []
+SCOPERATE = 8
+anim = None # necessary matplotlib thing
 
 
 # every module has _ins and _outdata 
@@ -67,18 +74,63 @@ globnodes = []
 
 # TODO: if we assume tiny chunks, some modules can probably be simplified
 
+# TODO: stateful modules need to have some sort of _reset function that gets
+# on every new eval() call
+
 
 def toposort(out):
     topo = []
     visited = set()
     def _build(v):
-        if v not in visited:
+        if v is not None and v not in visited:
                 visited.add(v)
                 for child in v.ins.values():
                     _build(child)
                 topo.append(v)
     _build(out)
     return topo
+
+def _livescopes(dur):
+
+    print("Starting scopes...")
+
+    fig = plt.figure(figsize=(12, 6))
+    fig.tight_layout()
+    nscopes = len(globscopes)
+    axes = [fig.add_subplot(nscopes, 1, i+1) for i in range(nscopes)]
+    for i,ax in enumerate(axes):
+        ax.set_xlim(-globscopes[i].window, 0)
+        ax.set_ylabel(f"{globscopes[i].ins['a']} -> {globscopes[i]}")
+    initx = np.linspace(-1/SCOPERATE, 0, int(SR/SCOPERATE))
+    inity = np.zeros_like(initx)
+    plots = [ax.plot(initx, inity)[0] for ax in axes]
+
+    frames = int((dur/SR)*SCOPERATE)
+    interval = interval=int(1000/SCOPERATE)
+
+    def animate(at):
+        for i in range(len(plots)):
+            x, y = globscopes[i].getlast()
+            plots[i].set_data(x, y)
+            axes[i].set_ylim(min(np.min(y),-1) - 0.05, max(np.max(y), 1) + 0.05)
+
+        if at == frames-1:
+            plt.close()
+
+    global anim
+    anim = animation.FuncAnimation(fig, animate, repeat=False, 
+                                frames=frames, interval=interval)
+    plt.show()
+
+def _showscopes():
+    nscopes = len(globscopes)
+    for i in range(nscopes):
+        plt.subplot(nscopes, 1, i+1)
+        scope = globscopes[i]
+        x, y = globscopes[i].getdata(None)
+        plt.plot(x, y)
+    plt.tight_layout(pad=1.0)
+    plt.show()
 
 
 class Module():
@@ -94,34 +146,11 @@ class Module():
         self._ready = False
 
         self.i = len(globnodes)
-        globnodes.append(self.i)
+        globnodes.append(self)
 
     def __repr__(self):
-        return f"{self.i}: {self.__class__.__name__}"
-
-    def play(self, dur, live=False):
-        if not live:
-            data = self.eval(dur)
-            sd.play(data, SR)
-            sd.wait()
-            return
-        
-        global gtime; gtime = 0
-        def _callback(outdata, frames, t, status):
-            global gtime
-            outdata[:] = self.proc(gtime)
-            gtime += CHUNK
-        with sd.OutputStream(samplerate=SR, blocksize=CHUNK, callback=_callback):
-            sd.sleep(int(dur/SR * 1000))
-
-    def eval(self, dur):
-        """Process [0, dur/CHUNK] chunks for all modules and concat root output."""
-
-        data = []
-        for t, smp in enumerate(range(0, dur, CHUNK)):
-            self.proc(t)
-            data.append(self.outdata)
-        return np.concatenate(data)[:dur]
+        #return f"{self.i}: {self.__class__.__name__}"
+        return f"{self.__class__.__name__}({self.i})"
 
     def _compute(self, t):
         """Compute the next chunk.
@@ -133,7 +162,7 @@ class Module():
         pass
 
     def _filter(self, x, y, zi):
-        """Compute filtered values for this chunk.
+        """Compute filtered values for this chunk
         
         Args:
             x: unfiltered values for interval [t, t+CHUNK]
@@ -143,7 +172,7 @@ class Module():
         pass
 
     def proc(self, t):
-        """Process one chunk for all upstream modules."""
+        """Process one chunk for all upstream modules"""
         topo = toposort(self)
 
         #print(topo)
@@ -155,11 +184,9 @@ class Module():
         # for i in range(50):
         #     for node in topo:
         #         node._proc(t, 0)
-            
-
 
     def _proc(self, t, d=0):
-        """Process one chunk for this module."""
+        """Process one chunk for this module"""
         #print(f"_proc on {self}")
 
         for inn in self.ins:
@@ -167,9 +194,55 @@ class Module():
                 self.indata[inn] = self.ins[inn].outdata
         if d > MAXDEPTH:
             return
-
         chunk = self._compute(t, d)
-        self.outdata = chunk  
+        self.outdata = chunk
+
+    def eval(self, dur):
+        """Process [0, dur/CHUNK] chunks for all modules and concat root output"""
+
+        data = []
+        for t, smp in enumerate(range(0, dur, CHUNK)):
+            self.proc(t)
+            data.append(self.outdata)
+        return np.concatenate(data)[:dur]
+
+
+    def play(self, dur, live=False, callback=None, scopes=True):
+        """Play the output from this node for dur samples"""
+
+        scopes = scopes and len(globscopes) > 0
+
+        if not live:
+            data = self.eval(dur)
+            if scopes: _showscopes()
+            sd.play(data, SR)
+            sd.wait()
+            return
+
+        # TODO: decide if we can have global scopes or do we need concurrent comp. graph option
+
+        # TODO: fix live artifacts, sounds like every chunk is played, and THEN it waits for next one to be ready
+        
+        if scopes:
+            thread = Thread(target=_livescopes, args=(dur,))
+            thread.start()
+
+        global gtime; gtime = 0
+        def _callback(outdata, frames, t, status):
+            global gtime
+            ch = self.proc(gtime)
+            outdata[:, 0] = self.outdata
+            outdata[:, 1] = self.outdata
+            if callback is not None: callback(gtime*CHUNK/SR)
+            gtime += 1
+            
+        with sd.OutputStream(samplerate=SR, blocksize=CHUNK, callback=_callback):
+            sd.sleep(int(dur/SR * 1000))
+
+        if scopes:
+            thread.join()
+
+
 
     # --- DUNDER OPERATIONS ---
 
@@ -244,8 +317,9 @@ class Wave(Module):
         super().__init__()
 
     def _getdata(self, t, d=0):
-        # TODO: take t in seconds instead?
-        reqst, end = (t)*CHUNK, (t+1)*CHUNK
+        # TODO: converting from chunks to seconds to samples is numerically awkward
+        reqst, end = int(round(t*SR)), int(round(t*SR+CHUNK))
+        # reqst, end = (t)*CHUNK, (t+1)*CHUNK
         st, neg = max(reqst, 0), min(reqst, 0)
         chunk = None
         if isinstance(self.data, numbers.Number):
@@ -261,58 +335,77 @@ class Wave(Module):
         return chunk
 
     def _compute(self, t, d=0):
-        return self._getdata(t, d)
+        tsec = t*(CHUNK/SR)
+        return self._getdata(tsec, d)
 
 
-def get_crossings(a):
+def get_crossings(a, lastprev=0):
+    a = np.insert(a, 0, lastprev)
     mask = (a > 0.5)
-    shifted = np.ones(len(mask))
+    #print(mask)
+    shifted = np.zeros(len(mask)).astype(bool)
     shifted[1:] = mask[:-1]
+    #print(shifted)
     imp = np.logical_and(mask, np.logical_not(shifted))
+    imp = imp[1:]
     loc = np.nonzero(imp)[0]
     return loc
 
+
+# TODO: a better user intf would be to have a method like
+# or trigger(Sin(fe), control) or trigger(Sin(fe))(control)
+# but for now: all waves will be triggwaves
+
+# TODO: this behavior should be generalized if small chunks are assumed
+# all the modules need is a local time
+
 class TriggWave(Wave):
+    """A signal generator that resets at every input front"""
 
     def __init__(self, incontrol, data, pad=0):
         self.ins = {"control": incontrol}
         self.lastt = None
-        super().__init__(data, pad)
+        self.lastprev = 1
+        super().__init__(data)
 
     def _compute(self, t, d=0):
         control = self.indata["control"]
-        loc = get_crossings(control)
+        #print(np.max(control))
+        loc = get_crossings(control, self.lastprev)
         out = np.zeros(CHUNK)
         tsec = t*CHUNK / SR
         tarray = np.arange(CHUNK) / SR + tsec
+        self.lastprev = control[-1]
+
+        #print(round(tsec,3), self.lastt, loc)
 
         if self.lastt is not None:
+            if self.lastt > tsec: self.lastt = tsec
             elapsed = tsec - self.lastt
-            #out = self._getdata(elapsed, d)
-            elapsed_chunks = int(elapsed*SR/CHUNK)
-            shift = int(elapsed*SR) % CHUNK
-            #print(len(out), shift)
-            if shift == 0: shift = 1 #BODGE
-            out[:shift] = self._getdata(elapsed_chunks, d)[-shift:]
-            out[shift:] = self._getdata(elapsed_chunks+1, d)[:-shift]
+            out = self._getdata(elapsed, d)
         for i in loc:
             self.lastt = tarray[i]
-            wave = self._getdata(0, d)[i:]
-            out[i:] = wave
-        return out
+            wave = self._getdata(0, d)
+            out[i:] = wave[:len(wave)-i]
 
+        return out
 
 
 class Input(Wave):
     """Generate output level with function call"""
     # TODO: Async?
 
+    # TODO: if you can have more than one keypress in a chunk
+    # then other module need to stay as they are
+    # if we limit it to one per chunk, it can be simplified
+
     def __init__(self):
         super().__init__(0)
 
     def set(self, value):
-        assert isinstance(self.data, numbers.Number)
+        assert isinstance(value, numbers.Number)
         self.data = value
+
         
 class Ramp(Wave):
     """Gradual interpolation between two signal values"""
@@ -354,13 +447,12 @@ class Pulses(Wave):
 
 
 
-class Envelope(Wave):
+class Envelope(TriggWave):
     """Output an envelope signal at every input front"""
 
     # TODO: ADSR not just AD
 
     def __init__(self, ina, durs=(4000, 2000, 0, 10000), suslvl=0.7, thr=0.5):
-        self.ins = {"a": ina}
         self.durs = durs
         self.suslvl = suslvl
         self.thr = thr
@@ -372,28 +464,9 @@ class Envelope(Wave):
         #sustain = np.ones(20000) * suslvl
         release = np.linspace(1, 0, rel)**2 * suslvl
 
-        self.adenv = np.concatenate([np.linspace(0, 1, att), np.linspace(1, 0, rel)**2])
-
-        self._state = 0 # 0-idle, 1-pressed, 2-released
-        self._t = 0 # time since state change
-
-        self.history = np.zeros(CHUNK)
-
-        super().__init__(None)
-
-    def data(self, t):
-        # BODGE
-        # BUG: what if the press is aligned with segment start
-        a = self.indata["a"]
-        out = np.zeros(len(t))
-        out[:len(self.history)] = self.history[:len(out)]
-        self.history = self.history[len(out):]
-        loc = get_crossings(a)
-        for i in loc:
-            inlen = min(len(self.adenv), len(out)-i)
-            out[i: i+inlen] = self.adenv[:inlen]
-            self.history = self.adenv[inlen:]
-        return out
+        data = np.concatenate([np.linspace(0, 1, att), np.linspace(1, 0, rel)**2])
+        print(data.shape)
+        super().__init__(ina, data)
 
 
 class Sequencer(Wave):
@@ -411,10 +484,8 @@ class Sequencer(Wave):
         a = self.indata["a"]
         out = np.zeros(len(t))
         loc = get_crossings(a)
-        print(loc)
         prev = 0
         for i in loc:
-            print(prev, i)
             out[prev:i] = float(self.sequence[self.state])
             out[i-1] = 0.0
             self.state = (self.state + 1) % len(self.sequence)
@@ -445,7 +516,8 @@ class Triangle(Wave):
         self.ratio = ratio
         p = 1/self.freq
         rtime = p*ratio
-        self.data = lambda t: (t%p <= rtime) * ((t%p)  / rtime - 1) -  (t%p > rtime ) * (((t%p) - rtime) / (p - rtime))
+        # TODO: this can be cleaned up
+        self.data = lambda t: 1 + 2 * ((t%p <= rtime) * ((t%p)  / rtime - 1) - (t%p > rtime ) * (((t%p) - rtime) / (p - rtime)))
 
 class Saw(Wave):
 
@@ -543,7 +615,6 @@ class Lowpass(Module):
         maxcut = 5000
         mincut = 500
         cutoff = control[0]*maxcut + (1-control[0])*mincut
-        print(control[2])
         M = int(SR/cutoff)
         b = np.ones(M)/M
         zi = self.zi[-(M-1):]
@@ -559,8 +630,6 @@ class Lowpass(Module):
         y, zf = sp.signal.lfilter(self.b, self.a, x, zi=self.zi)
         self.zi = zf
         return y
-
-
 
 
 
@@ -610,7 +679,7 @@ Latch = compose( lambda a, control: a * (control > 0) , "Latch")
 Crosstrigger = compose( lambda a:  (a > 0) * (((a > 0) >> 1/SR) < 0.5) , "Crosstrigger")
 
 
-
+# --- VISUALIZATION ---
     
 def showsound(module, x1=0, x2=30000, sec=False):
     if sec:
@@ -624,6 +693,48 @@ def showsound(module, x1=0, x2=30000, sec=False):
     plt.xlim((x1, x2))
     plt.show()
 
+
+# TODO: standardize labels/names
+
+# TODO: now "sinks" that are not called dont get put into the comp. graph, should we change this or
+# should scopes be pass through
+
+class Scope(Module):
+    """Visualize input signal at play time"""
+
+    def __init__(self, ina, window=0.25, dist=0.5):
+        self.ins = {"a": ina}
+        self.window = window
+        globscopes.append(self)
+        self.history = np.zeros(int(SR*self.window))
+        self.dist = dist
+        self.distsamp = int(SR*self.window)
+        super().__init__()
+        
+    def _compute(self, t, d=0):
+        data = self.indata["a"]
+        self.history = np.concatenate([self.history, data])[-self.distsamp:]
+        return data
+
+    def getdata(self, dur):
+        dursamp = int(dur*SR) if dur else len(self.history)
+        y = self.history[-dursamp:]
+        x = np.linspace(-dursamp/SR, 0, dursamp)
+        return x, y
+    
+    def getlast(self):
+        return self.getdata(self.window)
+
+    def show(self, dur, ax=None):
+        x, y = self.getdata(dur)
+        if ax is None: ax = plt
+        ax.plot(x, y)
+        ax.title(f"{self} showing {self.ins['a']}")
+
+
+
+    
+        
 def trace(root):
     root._isroot = True
     nodes, edges = set(), set()
@@ -631,14 +742,16 @@ def trace(root):
         if v not in nodes:
             nodes.add(v)
             for child in v.ins.values():
-                edges.add((child, v))
-                build(child)
+                if child is not None:
+                    edges.add((child, v))
+                    build(child)
     build(root)
     return nodes, edges
 
+
 # TODO: cleaner
 
-def drawgraph(root, format='svg', rankdir='LR'):
+def drawgraph(root, format='svg', rankdir='LR', render=True):
     """
     format: png | svg | ...
     rankdir: TB (top to bottom graph) | LR (left to right)
@@ -660,9 +773,10 @@ def drawgraph(root, format='svg', rankdir='LR'):
         if isinstance(n, Add): label = '+'
         if isinstance(n, Mul): label = "*"
         if isinstance(n, Wave) and isinstance(n.data, numbers.Number):
-            label = str(round(n.data, 3))
-            color = 'gainsboro'
-            fontcolor = 'gainsboro'
+            if not isinstance(n, Input):
+                label = str(round(n.data, 3))
+                color = 'gainsboro'
+                fontcolor = 'gainsboro'
         if hasattr(n, "label"): label = n.label
         dot.node(name=str(id(n)), label=label, shape='record', color=color, fontcolor=fontcolor)
         # if n._op:
@@ -671,11 +785,12 @@ def drawgraph(root, format='svg', rankdir='LR'):
     
     for n1, n2 in edges:
         color = 'black'
-        if isinstance(n1, Wave) and isinstance(n1.data, numbers.Number) or \
-            isinstance(n2, Wave) and isinstance(n2.data, numbers.Number):
-            color = 'gainsboro'
+        if isinstance(n1, Wave) and isinstance(n1.data, numbers.Number):
+            if not isinstance(n1, Input):
+                color = 'gainsboro'
         dot.edge(str(id(n1)), str(id(n2)), color=color) # + n2._op
     
+    dot.render("gout", view=True)
     return dot
 
 
@@ -752,20 +867,59 @@ if __name__ == "__main__":
     # KARPLUS
 
     # noise = Wave(np.random.rand(4000)-0.5)
-    # noise += out
-    # delay = Delay(None, delay=0.003)
+    # delay = Delay(None, delay=0.005)
     # add = noise + delay
-    # delay.ins["a"] = 0.95 * add
+    # delay.ins["a"] = 0.93 * add
     # out = add
+    # frozen = out.eval(2*SR)
+
+    # sample, sr = librosa.load("Phlex_short.wav", mono=False)
+    # l = Scope(Wave(sample[0, :]))
+    # r = Scope(Wave(sample[1, :]))
+    # SR = sr
+
+    # out = 0.5 * (0.5*l - 0.5*r) + 0.5 * Lowpass(0.5*l + 0.5*r, cutoff=100)
+    # out = Scope(out)
+
+    # g = drawgraph(out); g.render("gout", view=True)
+    # out.play(100000, live=False)
 
 
-    control = Pulses()
-    wave = TriggWave(control, np.random.rand(5000))
+    # ENVELOPE INPUT
+    # SCOPERATE = 8
+    # CHUNK = 300
 
-    out = wave
-    
-    g = drawgraph(out); g.render("gout", view=True)
-    showsound(out, x2=150000)
-    out.play(150000, live=False)
+    # control = Input()
+    # env = Envelope(Scope(control, window=0.5), (2000, 0, 0, 8000))
+    # out = Scope(env, window=0.5)
+    # out = Scope(out * Saw(100), window=0.5)
+
+    # #global val
+    # val = 0
+    # def loop(t):
+    #     #global val
+    #     if keyboard.is_pressed('l'):
+    #         control.set(1)
+    #     else:
+    #         control.set(0)
+    # drawgraph(out)
+    # out.play(30*SR, live=True, callback=loop)
+
+
+    # LOWPASS TESTS
+    sample, sr = librosa.load("house.mp3", mono=False)
+    SR = sr
+    music = Scope(Wave(sample[0, :]))
+    out = Scope(Lowpass(music))
+    drawgraph(out)
+    out.play(180*SR, live=True)
+
+
+    #g = drawgraph(out); g.render("gout", view=True)
+    #showsound(out, x2=150000/SR, sec=True)
+    #out.play(150000, live=True, callback=loop)
+
+    # TODO: should samples or seconds be the standard unit of time ?
+    # TODO: should the interface instead be Module(params)(inputs)
 
 
