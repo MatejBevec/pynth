@@ -632,6 +632,63 @@ class Lowpass(Module):
         return y
 
 
+class FreqFilter(Module):
+    """Base class for frequency domain filters"""
+
+    def __init__(self):
+        # 1. get and store freq_response
+        pass
+
+    def freq_response():
+        # standardize to 2048 bins from 20Hz to 20000Hz?
+        pass
+
+    def _compute(self, t, d=0):
+        # 1. fetch the correct window
+        # 2. zero pad
+        # 3. FFT
+        # 4. multiply X by freq_response
+        # 5. IFFT
+        # 6. sum with prev buffer
+        # 7. store next buffer
+        pass
+
+# TEMP
+class Butter(Module):
+
+    def __init__(self, ina=None, crit=100, btype="lowpass", fs=SR):
+        self.ins = {"a": ina}
+        self.crit = 0.1
+        self.btype = btype
+
+        order = 4
+        self.b, self.a = sp.signal.butter(order, self.crit, self.btype, analog=False)
+        
+        #w = w * SR / 2
+
+        freq = self.crit*SR / 2
+        b, a = sp.signal.butter(order, freq, self.btype, analog=True)
+        w, h = sp.signal.freqs(b, a)
+        plt.semilogx(w, 20 * np.log10(abs(h)))
+        plt.title('Butterworth filter frequency response')
+        plt.xlabel('Frequency [radians / second]')
+        plt.ylabel('Amplitude [dB]')
+        plt.margins(0, 0.1)
+        plt.grid(which='both', axis='both')
+        plt.show()
+
+        self.zi = sp.signal.lfilter_zi(self.b, self.a)
+        super().__init__()
+
+    def _compute(self, t, d=0):
+        #print(self.__dict__)
+        x = self.indata["a"]
+        y, zf = sp.signal.lfilter(self.b, self.a, x, zi=self.zi)
+        self.zi = zf
+        return y
+
+
+
 
 # --- COMPOSED MODULES ---
 
@@ -906,13 +963,22 @@ if __name__ == "__main__":
     # out.play(30*SR, live=True, callback=loop)
 
 
-    # LOWPASS TESTS
-    sample, sr = librosa.load("house.mp3", mono=False)
+    # # LOWPASS TESTS
+    # sample, sr = librosa.load("house.mp3", mono=False)
+    # SR = sr
+    # music = Scope(Wave(sample[0, :]))
+    # out = Scope(Lowpass(music))
+    # drawgraph(out)
+    # out.play(180*SR, live=True)
+
+    
+    # FILTER TESTS
+    sample, sr = librosa.load("house.mp3")
     SR = sr
-    music = Scope(Wave(sample[0, :]))
-    out = Scope(Lowpass(music))
-    drawgraph(out)
-    out.play(180*SR, live=True)
+    music = Scope(Wave(sample))
+    butter = Butter(music, crit=500, btype="low")
+    out = Scope(butter)
+    out.play(60*SR, live=True)
 
 
     #g = drawgraph(out); g.render("gout", view=True)
