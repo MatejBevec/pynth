@@ -46,6 +46,10 @@ anim = None # necessary matplotlib thing
 
 # TODO: how to handle multiple outputs on modules like sequencer/piano roll
 
+# TODO: to enable usage like   from pynth import *   , global constants like SR need to change
+
+# BUG: multithreading error with Scopes
+
 
 
 #   --------- HELPER FUNCTIONS ----------
@@ -913,7 +917,7 @@ if __name__ == "__main__":
 
     # SAMPLES, VOCAL REMOVER
 
-    sample, sr = librosa.load("Phlex_short.wav", mono=False)
+    sample, sr = librosa.load("../pop.wav", mono=False)
     l = Wave(sample[0, :])
     r = Wave(sample[1, :])
     SR = sr
@@ -966,7 +970,7 @@ if __name__ == "__main__":
 
     # LOWPASS SWIPE
 
-    # sample, sr = librosa.load("house.mp3", mono=True)
+    # sample, sr = librosa.load("../house.mp3", mono=True)
     # SR = sr
     # music = Wave(sample)    
     # control = Scope(Sin(1/5)*0.5+0.5)
