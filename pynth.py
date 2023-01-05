@@ -4,7 +4,6 @@ import math
 import numbers
 import inspect
 import time
-#from multiprocessing import Process
 from threading import Thread
 
 import numpy as np
@@ -28,38 +27,6 @@ SCOPERATE = 8
 anim = None # necessary matplotlib thing
 
 
-# every module has _ins and _outdata 
-# when a module is called, it takes _ins[i]._outdata and computes its own _outdata
-
-# module types are:
-# generator ->
-# filter -> takes _ins, produces _outdata, implements _filter(x, y, zi)
-#       * linear -> needs to only init _a and _b or _impres, idk if as attributes or function
-#       * frequency -> frequency domain filter, probably implements _freqfilt(X) where X is the spectrum with standardized axes
-
-
-
-# this is done from waves to root (output) after a topo sort of nodes
-# because there can be cycles, topo sort will fail
-#   -> try computing nodes anyways and if any dont have ready inputs, just assume np.zeros() ?
-# the clock is local to root? -> and passed around in _proc
-
-
-# DECISIONS:
-# prioritize DRY/abstraction or atomic modules?
-# should arithmetic/logic operations accept 2 inputs or any number of
-# -> or have "composite" modules
-
-# THE BIG ISSUE:
-# use small chunks (smaller than min delay), make loops easy, sacrifice speed
-# or support larger chunks, make loops resolutions really complex, make use of numpy speedups
-# VERDICT: FIRST OPTION FOR NOW
-
-
-# TODO: TRIGGERED WAVES like an Envelope should be generalized somehow
-    # TODO: any submodule should only implement the basic "response", time shifting, memory across chunks
-    # etc. should be generalized
-
 # TODO: MODULATING PARAMETERS
     # TODO: either modules like Delay, Oscillators etc. take a "control" input
     # TODO: or there is a wrapped Modulate, that can change any parameters of the wrapped module
@@ -79,6 +46,9 @@ anim = None # necessary matplotlib thing
 
 # TODO: how to handle multiple outputs on modules like sequencer/piano roll
 
+
+
+#   --------- HELPER FUNCTIONS ----------
 
 def toposort(out):
     topo = []
@@ -169,6 +139,9 @@ def to_bipolar(a):
     return a * 2 - 1
 
 
+
+#   --------- MODULE CLASSES ----------
+
 class Module():
     """Base class"""
 
@@ -185,7 +158,6 @@ class Module():
         globnodes.append(self)
 
     def __repr__(self):
-        #return f"{self.i}: {self.__class__.__name__}"
         return f"{self.__class__.__name__}({self.i})"
 
     def _compute(self, t, d=0):
@@ -197,33 +169,15 @@ class Module():
         """
         pass
 
-    def _filter(self, x, y, zi):
-        """Compute filtered values for this chunk
-        
-        Args:
-            x: unfiltered values for interval [t, t+CHUNK]
-            y: filtered values for interval [t, t+CHUNK]
-            zi: filter memory from previous chunks
-        """
-        pass
-
     def proc(self, t):
         """Process one chunk for all upstream modules"""
         topo = toposort(self)
 
-        #print(topo)
-
-        # Lets try the acyclical case first
         for node in topo:
             node._proc(t, 0)
 
-        # for i in range(50):
-        #     for node in topo:
-        #         node._proc(t, 0)
-
     def _proc(self, t, d=0):
         """Process one chunk for this module"""
-        #print(f"_proc on {self}")
 
         for inn in self.ins:
             if self.ins[inn] is not None:
@@ -234,7 +188,7 @@ class Module():
         self.outdata = chunk
 
     def eval(self, dur):
-        """Process [0, dur/CHUNK] chunks for all modules and concat root output"""
+        """Process [0, dur/CHUNK] chunks for all modules and concat outputs"""
 
         data = []
         for t, smp in enumerate(range(0, dur, CHUNK)):
@@ -256,8 +210,6 @@ class Module():
             return
 
         # TODO: decide if we can have global scopes or do we need concurrent comp. graph option
-
-        # TODO: fix live artifacts, sounds like every chunk is played, and THEN it waits for next one to be ready
         
         if scopes:
             thread = Thread(target=_livescopes, args=(dur,))
@@ -277,7 +229,6 @@ class Module():
 
         if scopes:
             thread.join()
-
 
 
     # --- DUNDER OPERATIONS ---
@@ -352,19 +303,20 @@ class Wave(Module):
         self._pad = pad
         super().__init__()
 
-    def _getdata(self, t, d=0):
         # TODO: converting from chunks to seconds to samples is numerically awkward
+
+    def _getdata(self, t, d=0):
         reqst, end = int(round(t*SR)), int(round(t*SR+CHUNK))
         # reqst, end = (t)*CHUNK, (t+1)*CHUNK
         st, neg = max(reqst, 0), min(reqst, 0)
         chunk = None
-        if isinstance(self.data, numbers.Number):
+        if isinstance(self.data, numbers.Number):   # data can be a constant
             chunk = np.full((end - st,), self.data)
-        if isinstance(self.data, np.ndarray):
+        if isinstance(self.data, np.ndarray):       # data can be an array of samples
             l = len(self.data)
             chunk = self.data[min(st, l) : min(end, l)]
             chunk = np.pad(chunk, (0, end-st - len(chunk)), constant_values=self._pad)
-        if callable(self.data):
+        if callable(self.data):                     # data can be a function over time
             chunk = self.data(np.linspace(st/SR, end/SR, end-st))
         chunk = np.pad(chunk, (-neg, 0))
         assert len(chunk) == CHUNK
@@ -376,11 +328,8 @@ class Wave(Module):
 
 
 
-
-
 # TODO: a better user intf would be to have a method like
 # or trigger(Sin(fe), control) or trigger(Sin(fe))(control)
-# but for now: all waves will be triggwaves
 
 # TODO: this behavior should be generalized if small chunks are assumed
 # all the modules need is a local time
@@ -396,14 +345,11 @@ class TriggWave(Wave):
 
     def _compute(self, t, d=0):
         control = self.indata["control"]
-        #print(np.max(control))
         loc = get_crossings(control, self.lastprev)
         out = np.zeros(CHUNK)
         tsec = t*CHUNK / SR
         tarray = np.arange(CHUNK) / SR + tsec
         self.lastprev = control[-1]
-
-        #print(round(tsec,3), self.lastt, loc)
 
         if self.lastt is not None:
             if self.lastt > tsec: self.lastt = tsec
@@ -419,8 +365,8 @@ class TriggWave(Wave):
 
 class Input(Wave):
     """Generate output level with function call"""
-    # TODO: Async?
 
+    # TODO: Multithreaded Async instead of callback?
     # TODO: if you can have more than one keypress in a chunk
     # then other module need to stay as they are
     # if we limit it to one per chunk, it can be simplified
@@ -482,8 +428,8 @@ class Envelope(TriggWave):
         self.durs = durs
         self.suslvl = suslvl
         self.thr = thr
-        att, dec, sus, rel, = durs
         # sus is the sustain duration if key is released immediately
+        att, dec, sus, rel, = durs 
 
         attack = np.linspace(0, 1, att)
         decay = np.linspace(1, 0, dec)**2 * (1-suslvl) + suslvl
@@ -497,8 +443,6 @@ class Envelope(TriggWave):
 
 class Sequencer(Wave):
     """Output next bit from a sequence at every input front"""
-
-    # TODO: how to handle possible repeat calls
 
     def __init__(self, ina, sequence):
         self.ins = {"a": ina}
@@ -525,7 +469,7 @@ class Sequencer(Wave):
         return out
 
 
-# --- BASIC OSCILLATORS ---
+#   --------- BASIC OSCILLATORS ----------
 
 # TODO: consider removing amp and phase, it can be done with Mul and Delay
 
@@ -573,7 +517,8 @@ class WhiteNoise(Wave):
         self.data = lambda t: np.random.rand(len(t))*2 - 1
 
 
-# --- OPERATIONS ---
+
+#   --------- ARITHMETIC AND LOGIC OPERATIONS ----------
 
 class TwoOp(Module):
     """An arithmetic or logic operation over two inputs."""
@@ -636,6 +581,7 @@ class Bipol(Module):
         return to_bipolar(self.indata["a"])
 
 
+
 class Delay(Module):
     """Output a delayed input signal"""
 
@@ -658,7 +604,9 @@ class Delay(Module):
 
 
 class FreqFilter(Module):
-    """Base class for frequency domain filters"""
+    """Filter with given frequency response"""
+
+    # TBA: basically an FFT implementation of EQ
 
     def __init__(self):
         # 1. get and store freq_response
@@ -678,7 +626,12 @@ class FreqFilter(Module):
         # 7. store next buffer
         pass
 
+
+
+# TODO: generalize filters and modulation
+
 class Filter(Module):
+    """Base class for LTI filters"""
 
     def __init__(self):
         # A filter should set self.a and self.b at init
@@ -688,6 +641,8 @@ class Filter(Module):
         super().__init__()
 
     def _setparam(self):
+        """Reconstruct filter with updated params. Do not override."""
+
         if self._getparam is None: return
         param = self._getparam()
         if param is None: return
@@ -699,6 +654,11 @@ class Filter(Module):
         else:
             znew[:len(self.zi)] = self.zi
             self.zi = znew
+
+    def _getparam(self):
+        """Computes params according to control inputs and returns b, a.
+            Override this method."""
+        pass
         
     def _compute(self, t, d=0):
         self._setparam()
@@ -707,9 +667,8 @@ class Filter(Module):
         self.zi = zf
         return y
 
-# TODO: generalize filters and modulation
-
 class Butter(Filter):
+    """Butterworth filter from provided params"""
 
     # BUG: impulse artifact
 
@@ -730,6 +689,7 @@ class Butter(Filter):
         return b, a
 
 class MovingAvg(Filter):
+    """Moving average lowpass filter"""
     
     def __init__(self, ina=None, incontrol=None, M=50):
         self.ins = {"a": ina, "control": incontrol}
@@ -746,6 +706,7 @@ class MovingAvg(Filter):
         return b, a
 
 class EQ(Filter):
+    """Window-function-based custom EQ"""
 
     def __init__(self, ina=None, freq=[20, 20000], gain=[1, 1]):
         self.ins = {"a": ina}
@@ -753,6 +714,7 @@ class EQ(Filter):
         super().__init__()
 
 class Lowpass(Filter):
+    """Lowpass with modulated cutoff and resonance"""
 
     def __init__(self, ina=None, incontrol=None, inres=None, cutoff=0.5, res=0.2):
         self.ins = {"a": ina, "control": incontrol, "res": inres}
@@ -766,14 +728,12 @@ class Lowpass(Filter):
         rband = 0.05 # width of transition to resonance peak
         cutoff = max(min(0.99, cutoff), 0.01)
         freq = [0, max(cutoff-rband, 0.01), cutoff, min(cutoff+cband, 0.99), 1]
-        #print(freq)
         gain = [1-res, 1-res, 1, 0, 0]
         return sp.signal.firwin2(100, freq, gain), [1, 0]
 
     def _getparam(self):
         inc = self.ins["control"] is not None
         inr = self.ins["res"] is not None
-        #print(self.indata["control"])
         if not (inc or inr): return
         if inc: self.cutoff = self.indata["control"][0]
         if inr: self.res = self.indata["res"][0]
@@ -781,10 +741,9 @@ class Lowpass(Filter):
 
 
 
-# --- COMPOSED MODULES ---
+#   --------- COMPOSED MODULES ----------
 
 # TODO: cleaner
-
 # TODO: compose() should accept parameters too
 
 def compose(factory, label=None):
@@ -827,9 +786,12 @@ Latch = compose( lambda a, control: a * (control > 0) , "Latch")
 Crosstrigger = compose( lambda a:  (a > 0) * (((a > 0) >> 1/SR) < 0.5) , "Crosstrigger")
 
 
-# --- VISUALIZATION ---
+
+#   --------- VISUALIZATION ----------
     
 def showsound(module, t1=0, t2=30000, sec=False):
+    """Evaluate module and plot output sound"""
+
     if sec:
         t1, t2 = int(t1*SR), int(t2*SR)
     data = module.eval(t2)
@@ -843,9 +805,7 @@ def showsound(module, t1=0, t2=30000, sec=False):
 
 
 # TODO: standardize labels/names
-
-# TODO: now "sinks" that are not called dont get put into the comp. graph, should we change this or
-# should scopes be pass through
+# TODO: now "sinks" that are not called dont get put into the comp. graph, should we change this?
 
 class Scope(Module):
     """Visualize input signal at play time"""
@@ -879,8 +839,6 @@ class Scope(Module):
         ax.plot(x, y)
         ax.title(f"{self} showing {self.ins['a']}")
 
-
-
     
         
 def trace(root):
@@ -896,11 +854,9 @@ def trace(root):
     build(root)
     return nodes, edges
 
-
-# TODO: cleaner
-
 def drawgraph(root, format='svg', rankdir='LR', render=True):
-    """
+    """Draw the computation graph given the root (output) node.
+
     format: png | svg | ...
     rankdir: TB (top to bottom graph) | LR (left to right)
     """
@@ -909,7 +865,6 @@ def drawgraph(root, format='svg', rankdir='LR', render=True):
     dot = Digraph(format=format, graph_attr={'rankdir': rankdir}) #, node_attr={'rankdir': 'TB'})
     
     for n in nodes:
-        # "{ data %.4f | grad %.4f }" % (n.data, n.grad)
         isroot = hasattr(n, "_isroot") and n._isroot
         color = 'black'; fontcolor = 'black'
         if isinstance(n, Wave): color = 'blue'
@@ -950,22 +905,23 @@ if __name__ == "__main__":
     # out = 0.5 * Sin(200)
     # for i in range(5):
     #     out += 0.1 * Sin(100*i)
-    
-    # drawgraph(out); showsound(out, t2=0.5*SR)
+
+    # drawgraph(out)
+    # showsound(out, t2=0.1, sec=True)
     # out.play(5*SR)
 
 
     # SAMPLES, VOCAL REMOVER
 
-    # sample, sr = librosa.load("Phlex_short.wav", mono=False)
-    # l = Wave(sample[0, :])
-    # r = Wave(sample[1, :])
-    # SR = sr
-
-    # out = 0.5 * (0.5*l - 0.5*r) + 0.5 * MovingAvg(0.5*l + 0.5*r, M=50)
-
-    # drawgraph(out)
-    # out.play(10*SR)
+    sample, sr = librosa.load("Phlex_short.wav", mono=False)
+    l = Wave(sample[0, :])
+    r = Wave(sample[1, :])
+    SR = sr
+    
+    out = 0.5 * (0.5*l - 0.5*r) + 0.5 * MovingAvg(0.5*l + 0.5*r, M=50)
+    drawgraph(out)
+    showsound(out, t2=5, sec=True)
+    out.play(10*SR)
 
     
     # KARPLUS, FREEZING SAMPLES
@@ -976,9 +932,10 @@ if __name__ == "__main__":
     # delay.ins["a"] = 0.95 * MovingAvg(add, M=10)
     # out = add
     # frozen = Wave(add.eval(2*SR))
+    # frozen.play(2*SR)
 
-    # drawgraph(out); showsound(frozen, t2=2*SR)
-    # out.play(2*SR)
+    # drawgraph(out); showsound(frozen, t2=2, sec=True)
+    #out.play(2*SR)
 
 
     # SEQUENCER
@@ -990,26 +947,25 @@ if __name__ == "__main__":
     # out = env * Saw(200) * Sin(50)
 
 
-
     # ENVELOPES, USER INPUT, SCOPES
+
     # control = Input()
     # env = Envelope(Scope(control), (2000, 0, 0, 8000))
     # out = Scope(env)
     # out = Scope(out * Saw(100))
 
-    # #global val
     # val = 0
     # def loop(t):
-    #     #global val
     #     if keyboard.is_pressed('l'):
     #         control.set(1)
     #     else:
     #         control.set(0)
-    # drawgraph(out)
+
     # out.play(30*SR, live=True, callback=loop)
 
 
     # LOWPASS SWIPE
+
     # sample, sr = librosa.load("house.mp3", mono=True)
     # SR = sr
     # music = Wave(sample)    
@@ -1020,16 +976,18 @@ if __name__ == "__main__":
 
 
     # PROCEDURAL WIND
-    noise = WhiteNoise()
-    cutmod = Unipol(0.5*Sin(1/3) + 0.5*Sin(1/5)) * 0.1
-    resmod = Unipol((0.5*Sin(1) + 0.5*Sin(0.8)) >> 0.3) * 0.4 + 0.1
-    out = Scope(Lowpass(noise, cutmod, resmod))
-    drawgraph(out)
-    out.play(30*SR, live=False)
 
+    # noise = WhiteNoise()
+    # cutmod = Unipol(0.5*Sin(1/3) + 0.5*Sin(1/5)) * 0.1
+    # resmod = Unipol((0.5*Sin(1) + 0.5*Sin(0.8)) >> 0.3) * 0.4 + 0.1
+    # out = Scope(Lowpass(noise, cutmod, resmod))
+    # drawgraph(out)
+    # showsound(out, t2=0.5, sec=True)
+    #out.play(30*SR, live=False)
 
     
     # THIS IS ACID MAAAN
+
     # clock = Pulses(T=1/8)
     # clock = Sequencer(clock, [0,1,0,1,0,1,1,1])
     # env = Scope(Envelope(clock, durs=(1000, 0, 0, 5000)))
@@ -1037,6 +995,8 @@ if __name__ == "__main__":
     # out = env * Lowpass(voice, env, res=0.6)
     # out = Scope(out)
     # t0 = time.time()
+    # drawgraph(out)
+    # showsound(out, t2=3, sec=True)
     # out.play(20*SR, live=False)
     # print(time.time() - t0)
 
