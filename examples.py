@@ -71,7 +71,7 @@ if __name__ == "__main__":
     sample, sr = librosa.load("house.mp3", mono=True)
     pt.SR = sr
     music = pt.Wave(sample)    
-    control = pt.Scope(Sin(1/5)*0.5+0.5)
+    control = pt.Scope(pt.Sin(1/5)*0.5+0.5)
     out = pt.Lowpass(music, control, res=0.4)
     out = pt.Scope(out)
     out.play(20*pt.SR, live=True, callback=None)
