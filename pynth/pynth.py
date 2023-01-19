@@ -917,15 +917,15 @@ if __name__ == "__main__":
 
     # SAMPLES, VOCAL REMOVER
 
-    sample, sr = librosa.load("../pop.wav", mono=False)
-    l = Wave(sample[0, :])
-    r = Wave(sample[1, :])
-    SR = sr
+    # sample, sr = librosa.load("../pop.wav", mono=False)
+    # l = Wave(sample[0, :])
+    # r = Wave(sample[1, :])
+    # SR = sr
     
-    out = 0.5 * (0.5*l - 0.5*r) + 0.5 * MovingAvg(0.5*l + 0.5*r, M=50)
-    drawgraph(out)
-    showsound(out, t2=5, sec=True)
-    out.play(10*SR)
+    # out = 0.5 * (0.5*l - 0.5*r) + 0.5 * MovingAvg(0.5*l + 0.5*r, M=50)
+    # drawgraph(out)
+    # showsound(out, t2=5, sec=True)
+    # out.play(10*SR)
 
     
     # KARPLUS, FREEZING SAMPLES
@@ -965,7 +965,9 @@ if __name__ == "__main__":
     #     else:
     #         control.set(0)
 
-    # out.play(30*SR, live=True, callback=loop)
+    # drawgraph(out)
+    #out.play(30*SR, live=True, callback=loop)
+
 
 
     # LOWPASS SWIPE
@@ -981,13 +983,13 @@ if __name__ == "__main__":
 
     # PROCEDURAL WIND
 
-    # noise = WhiteNoise()
-    # cutmod = Unipol(0.5*Sin(1/3) + 0.5*Sin(1/5)) * 0.1
-    # resmod = Unipol((0.5*Sin(1) + 0.5*Sin(0.8)) >> 0.3) * 0.4 + 0.1
-    # out = Scope(Lowpass(noise, cutmod, resmod))
-    # drawgraph(out)
-    # showsound(out, t2=0.5, sec=True)
-    #out.play(30*SR, live=False)
+    noise = WhiteNoise()
+    cutmod = Unipol(0.5*Sin(1/3) + 0.5*Sin(1/5)) * 0.1
+    resmod = Unipol((0.5*Sin(1) + 0.5*Sin(0.8)) >> 0.3) * 0.4 + 0.1
+    out = Scope(Lowpass(noise, cutmod, resmod))
+    drawgraph(out)
+    showsound(out, t2=0.5, sec=True)
+    out.play(30*SR, live=False)
 
     
     # THIS IS ACID MAAAN

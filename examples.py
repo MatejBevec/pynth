@@ -1,6 +1,7 @@
 import keyboard
 
 import librosa
+import soundfile
 import numpy as np
 from pynth import pynth as pt
 
@@ -29,6 +30,7 @@ if __name__ == "__main__":
     pt.drawgraph(out)
     pt.showsound(out, t2=5, sec=True)
     out.play(10*pt.SR)
+    soundfile.write("vocal-remover.wav", out.eval(5*pt.SR), pt.SR)
 
     
     # KARPLUS, FREEZING SAMPLES
@@ -81,13 +83,14 @@ if __name__ == "__main__":
     input("Next example - precedural wind generator (press any key):")
 
     noise = pt.WhiteNoise()
-    cutmod = pt.Unipol(0.5*pt.Sin(1/3) + 0.5*pt.Sin(1/5)) * 0.1
-    resmod = pt.Unipol((0.5*pt.Sin(1) + 0.5*pt.Sin(0.8)) >> 0.3) * 0.4 + 0.1
+    cutmod = pt.Unipol(0.5*pt.Sin(1/3) + 0.5*pt.Sin(1/5)) * 0.08
+    resmod = pt.Unipol((0.5*pt.Sin(1) + 0.5*pt.Sin(0.8)) >> 0.3) * 0.4 + 0.2
     out = pt.Scope(pt.Lowpass(noise, cutmod, resmod))
 
     pt.drawgraph(out)
     pt.showsound(out, t2=0.5, sec=True)
-    out.play(30*pt.SR, live=False)
+    #out.play(30*pt.SR, live=False)
+    soundfile.write("wind.wav", out.eval(20*pt.SR), pt.SR)
 
     
     # THIS IS ACID MAAAN
