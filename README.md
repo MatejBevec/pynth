@@ -27,7 +27,7 @@ Please note that this project is in a prototype stage and is not optimized in te
 
 ### Overtones
 ```python
-from pynth import *
+from pynthlib import *
 
 out = 0.5 * Sin(200)
 for i in range(5):
