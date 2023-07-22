@@ -31,10 +31,6 @@ anim = None # necessary matplotlib thing
     # TODO: either modules like Delay, Oscillators etc. take a "control" input
     # TODO: or there is a wrapped Modulate, that can change any parameters of the wrapped module
 
-# TODO: INPUTS - how should they be passed in and modified later
-    # TODO: modify via controlled method, so everything is recomputed properly
-    # TODO: Compose - control input setting - the composed module needs to be updated on input changes
-
 # TODO: consider using factory methods like sin(), then saw() can return a special Triangle
 
 # TODO: auto normalize signals
@@ -50,11 +46,22 @@ anim = None # necessary matplotlib thing
 
 # BUG: multithreading error with Scopes
 
+# TODO: should samples or seconds be the standard unit of time ?
+
+# TODO: should the interface instead be Module(params)(inputs)
+
+# TODO: cap outputs at [-1, 1] ?
+
+# TODO: kill all threads if main crashes
+
+
 
 
 #   --------- HELPER FUNCTIONS ----------
 
 def toposort(out):
+    """Topological sorts the computation graph"""
+
     topo = []
     visited = set()
     def _build(v):
@@ -67,6 +74,7 @@ def toposort(out):
     return topo
 
 def _livescopes(dur):
+    """Display signals through all currently active Scope modules"""
 
     print("Starting scopes...")
 
@@ -147,7 +155,7 @@ def to_bipolar(a):
 #   --------- MODULE CLASSES ----------
 
 class Module():
-    """Base class"""
+    """Base module class"""
 
     def __init__(self):
         # self.ins = {}
@@ -600,7 +608,6 @@ class Delay(Module):
     
     def _compute(self, t, d=0):
         x = self.indata["a"]
-        #print(self.b.shape, len(self.a), x.shape, self.zi.shape)
         y, zf = sp.signal.lfilter(self.b, self.a, x, zi=self.zi)
         self.zi = zf
         return y
@@ -640,7 +647,6 @@ class Filter(Module):
     def __init__(self):
         # A filter should set self.a and self.b at init
         # and expose _getparam which returns new a, b according to control signal
-        print(self.a)
         self.zi = sp.signal.lfilter_zi(self.b, self.a)
         super().__init__()
 
@@ -685,10 +691,8 @@ class Butter(Filter):
 
     def _getparam(self):
         if self.ins["control"] is None: return
-        # TODO: cap at [0, 1]
         crit = self.indata["control"][0]
         assert crit >= 0 and crit <= 1
-        #print(crit)
         b, a = sp.signal.butter(2, crit*0.99+0.005, self.btype, analog=False)
         return b, a
 
@@ -1007,8 +1011,5 @@ if __name__ == "__main__":
     # print(time.time() - t0)
 
 
-    # TODO: should samples or seconds be the standard unit of time ?
-    # TODO: should the interface instead be Module(params)(inputs)
-    # TODO: cap outputs at [-1, 1] ?
-    # TODO: kill all threads if main crashes
+
 

@@ -1,0 +1,7 @@
+keyboard
+numpy
+scipy
+sounddevice
+matplotlib
+sounddevice
+librosa
