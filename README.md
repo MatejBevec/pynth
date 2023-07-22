@@ -7,14 +7,23 @@ Intuitive sound synthesis in python.
 ## Installation
 
 ```
+pip install pynth
+```
+
+Or directly from this repo:
+```
 git clone https://github.com/MatejBevec/pynth
 pip install ./pynth
 ```
+
+ 
 
 ## Usage
 
 Below are some usage examples. 
 For more info, feel free to read `DESCRIPTION.pdf` and check out `examples.py`.
+
+Please note that this project is in a prototype stage and is not optimized in terms of performance and reliability and is missing many planned features.
 
 ### Overtones
 ```python
