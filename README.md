@@ -7,13 +7,13 @@ Intuitive sound synthesis in python.
 ## Installation
 
 ```
-pip install pynth
+pip install pynthlib
 ```
 
 Or directly from this repo:
 ```
 git clone https://github.com/MatejBevec/pynth
-pip install ./pynth
+pip install ./pynthlib
 ```
 
  

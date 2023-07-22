@@ -1,5 +1,5 @@
-from pynth import *
-import pynth
+from pynthlib import *
+import pynthlib
 
 def sines():
     out = 0.5 * Sin(200)
@@ -32,7 +32,7 @@ def time_graphs(graphs, chunks, dur):
         for j,ch in enumerate(chunks):
             print(f"ch = {ch}")
             t0 = time.time()
-            pynth.CHUNK = ch
+            pynthlib.CHUNK = ch
             g.eval(dur*SR)
             elapsed = time.time() - t0
             res[i, j] = elapsed

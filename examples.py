@@ -3,7 +3,7 @@ import keyboard
 import librosa
 import soundfile
 import numpy as np
-from pynth import pynth as pt
+from pynthlib import pynth as pt
 
 if __name__ == "__main__":
 
