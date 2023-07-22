@@ -1,1 +1,1 @@
-from pynthlib import *
+from .pynth import *
