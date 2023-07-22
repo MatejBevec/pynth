@@ -19,9 +19,11 @@ For more info, feel free to read `DESCRIPTION.pdf` and check out `examples.py`.
 ### Overtones
 ```python
 from pynth import *
+
 out = 0.5 * Sin(200)
 for i in range(5):
-out += 0.1 * Sin(100*i)
+  out += 0.1 * Sin(100*i)
+  
 drawgraph(out)
 showsound(out, t2=0.1)
 out.play(5*SR)
@@ -36,6 +38,7 @@ sample, sr = librosa.load("file.wav", mono=False)
 l = Wave(sample[0, :])
 r = Wave(sample[1, :])
 SR = sr
+
 out = 0.5 * (0.5*l - 0.5*r)
 out += 0.5 * MovingAvg(0.5*l + 0.5*r, M=50)
 ```
@@ -79,12 +82,14 @@ control = Input()
 env = Envelope(Scope(control), (2000, 0, 0, 8000))
 out = Scope(env)
 out = Scope(out * Saw(100))
+
 val = 0
 def loop(t):
-if keyboard.is_pressed(’l’):
-control.set(1)
-else:
-control.set(0)
+  if keyboard.is_pressed(’l’):
+    control.set(1)
+  else:
+    control.set(0)
+    
 out.play(30*SR, live=True, callback=loop)
 ```
 
