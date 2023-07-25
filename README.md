@@ -16,7 +16,9 @@ git clone https://github.com/MatejBevec/pynth
 pip install ./pynthlib
 ```
 
- 
+To visualize the computation graphs, you will also need to install Graphviz, which
+
+Note that the `graphviz` library, used to visualize computation graphs, requires an installation of the *Graphviz* sofware. See https://pypi.org/project/graphviz/ for installation instructions.
 
 ## Usage
 

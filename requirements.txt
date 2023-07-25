@@ -3,3 +3,4 @@ numpy>=1.21.0
 scipy>=1.7.0
 sounddevice>=0.4.2
 matplotlib>=3.2.0
+graphviz>=0.14
